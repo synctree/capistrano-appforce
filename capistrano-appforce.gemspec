@@ -2,7 +2,7 @@
 require File.expand_path('../lib/capistrano-appforce/version', __FILE__)
 
 Gem::Specification.new do |gem|
-  gem.name          = "capistrano-appforce`"
+  gem.name          = "capistrano-appforce"
   gem.version       = CapistranoAppforce::VERSION
   gem.authors         = ["Jack Bishop"]
   gem.email           = ["jack.bishop@synctree.com"]
