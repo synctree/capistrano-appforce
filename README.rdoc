@@ -1,6 +1,6 @@
 = capistrano-appforce
 
-Description goes here.
+This gem allows for creating new servers in the cloud via capistrano.
 
 == Contributing to capistrano-appforce
  
