@@ -1,17 +1,32 @@
 require 'fog'
+require 'yaml'
 
 configuration = Capistrano::Configuration.respond_to?(:instance) ?
   Capistrano::Configuration.instance(:must_exist) : Capistrano.configuration(:must_exist)
 
 configuration.load do
+
+  @appforce = YAML::load(File.open("#{Dir.pwd}/config/appforce.yml"))
+  @cloud_provider = @appforce['cloud_providers'][stage]
+  @cloud_server_types = @appforce['server_types'].keys
+
+  #find credentials TODO: Swap this for ConfMan implementation
+  cloud_options = @appforce['cloud_options']["#{@cloud_provider}_#{stage}"]
+  @key = cloud_options['access_key']
+  @secret = cloud_options['secret']
+  @identity_file = cloud_options['identity_file']
+  @identity_file_name = cloud_options['identity_file_name']
+
   def create_server type
-    case cloud_provider
+    case @cloud_provider
       when :aws
-        @compute = Fog::Compute.new({:provider => "AWS", :aws_access_key_id => aws_key, :aws_secret_access_key => aws_secret, :region => aws_region}) 
-        server = @compute.servers.create(image_id: aws_image_id, flavor_id: aws_flavor, key_name: aws_key_name, groups: ["app", "default", "lb", "test"], availability_zone: aws_availability_zone)
+        opts = server_opts_for(type)
+        @compute = Fog::Compute.new({:provider => "AWS", :aws_access_key_id => @key, :aws_secret_access_key => @secret, :region => opts['aws_region']}) 
+        server = @compute.servers.create(image_id: opts['image_id'], flavor_id: opts['flavor_id'], key_name: @identity_file_name, groups:opts['security_groups'])
         puts "Creating server (#{server.id})"
         server.wait_for { print "."; ready? }
-        #TODO: Consider and array for this so we could run on all with the same command in the future
+        
+        #TODO: Consider an array for this so we could run on all with the same command in the future
         @server_dns_name = server.dns_name
         @server_id = server.id
         @compute.tags.create(resource_id:@server_id, key:"Name", value:"#{stage}_#{type}_#{@server_id}", resource_type:"instance")
@@ -21,26 +36,29 @@ configuration.load do
     end
   end
 
+  def server_opts_for type
+    config = @appforce['server_types'][type]
+    stage_config = config[stage]
+    config.merge(stage_config)
+  end
+
   def boostrap_server type
-    command = %Q(knife bootstrap #{@server_dns_name} -r "role[base], role[#{type}]" -N #{stage}_#{type}_#{@server_id} -i #{aws_identity_file} -x ubuntu --sudo)
-    #command = %Q(knife bootstrap #{@server_dns_name} -r "role[base], role[#{type}]" -N #{stage}_#{type}_#{@server_id} -x ubuntu --sudo)
+    opts = server_opts_for(type)
+    command = %Q(knife bootstrap #{@server_dns_name} -r #{opts['run_list']} -N #{stage}_#{type}_#{@server_id} -i #{@identity_file} -x #{opts['user']} --sudo)
     system(command)
   end
 
   def destroy_last_server type
-    case cloud_provider
+    case @cloud_provider
       when :aws
         system("knife ec2 server delete #{@server_id} --purge -N #{stage}_#{type}_#{@server_id} --region #{aws_region}")
     end
   end
 
+  ## BEGIN GENERATED TASKS
   namespace :cloud do
-    task :hello do 
-      puts "HELLO CLOUD"
-    end
-
     namespace :create do
-      cloud_server_types.each do |type|
+      @cloud_server_types.each do |type|
         desc "Create a new #{type} server on the cloud"
         task "#{type}".to_sym do 
           create_server "#{type}"
@@ -49,7 +67,7 @@ configuration.load do
     end
 
     namespace :bootstrap do 
-      cloud_server_types.each do |type|
+      @cloud_server_types.each do |type|
         desc "Bootstrap Chef on the server and execute the run list for #{type} servers"
         task "#{type}".to_sym do
           transaction do 
@@ -64,7 +82,7 @@ configuration.load do
     end
 
     namespace :delete do
-      cloud_server_types.each do |type|
+      @cloud_server_types.each do |type|
         desc "Delete a(n) #{type} server with the given id"
         task "#{type}".to_sym do
           #TODO: Validate user input against a fog list of servers which have the tag for the given server type.
